@@ -289,20 +289,85 @@ cd backend
 python test_scoring.py
 ```
 
+## 🚁 Team Dispatch System
+
+Smart team assignment based on proximity and availability.
+
+### How It Works
+
+1. **Find Available Teams** - Filters teams with status "available"
+2. **Calculate Distance** - Haversine distance (accurate for Earth's curvature)
+3. **Rank by Proximity** - Nearest teams first
+4. **Recommend Top 3** - With distance (km) and ETA estimates
+
+### API Endpoints
+
+**Get Dispatch Recommendations:**
+```http
+GET /api/reports/{id}/recommend-dispatch
+
+Response:
+{
+  "recommendations": [
+    {
+      "team_name": "NDRF Alpha Team",
+      "team_type": "NDRF",
+      "distance_km": 5.2,
+      "eta_estimate": "~8 min",
+      "capacity": 20
+    }
+  ]
+}
+```
+
+**Assign Team to Report:**
+```http
+POST /api/reports/{id}/assign
+Body: {"team_id": "..."}
+
+Actions:
+- Sets report.assigned_team
+- Updates report.status → "in_progress"
+- Updates team.status → "deployed"
+```
+
+**Unassign Team:**
+```http
+DELETE /api/reports/{id}/assign
+
+Actions:
+- Clears report.assigned_team
+- Updates team.status → "available"
+```
+
+### Testing Dispatch
+
+```bash
+cd backend
+python test_dispatch.py
+```
+
 ## 🔌 API Endpoints
 
-### Health Check
+### Health & System
 - `GET /` - Root endpoint with API info
-- `GET /api/health` - Health check endpoint
+- `GET /api/health` - Health check with scheduler status
 
-### Future Endpoints (to be implemented)
-- `GET /api/reports` - List all reports with filters
-- `GET /api/reports/{id}` - Get specific report
-- `POST /api/reports` - Create new report
-- `PATCH /api/reports/{id}` - Update report
-- `GET /api/teams` - List all teams
-- `GET /api/teams/{id}` - Get specific team
-- `PATCH /api/teams/{id}` - Update team status/location
+### Reports
+- `GET /api/reports` - List reports (filterable by status, urgency, assignment)
+- `GET /api/reports/{id}` - Get single report with urgency breakdown
+- `GET /api/reports/{id}/recommend-dispatch` - Get top 3 nearest teams
+- `POST /api/reports/{id}/assign` - Assign team to report
+- `DELETE /api/reports/{id}/assign` - Unassign team from report
+
+### Teams
+- `GET /api/teams` - List all teams (filterable by status, type)
+- `GET /api/teams/{id}` - Get team with workload info
+
+### Dashboard
+- `GET /api/dispatch/summary` - System-wide dispatch statistics
+
+**Interactive API Docs:** http://localhost:8000/docs
 
 ## 🗂️ Project Structure
 
@@ -315,6 +380,7 @@ rescueai/
 │   ├── app/
 │   │   ├── __init__.py
 │   │   ├── main.py              # FastAPI application
+│   │   ├── routes.py            # API endpoints
 │   │   ├── database.py          # Database connection
 │   │   ├── models.py            # SQLAlchemy models
 │   │   └── pipeline/            # Processing pipelines
@@ -322,6 +388,7 @@ rescueai/
 │   │       ├── dedup.py         # Deduplication logic
 │   │       ├── verify.py        # Verification logic
 │   │       ├── scoring.py       # Urgency scoring logic
+│   │       ├── dispatch.py      # Team dispatch logic
 │   │       └── README.md        # Pipeline documentation
 │   ├── .env                     # Environment variables
 │   ├── .env.example             # Example environment file
@@ -335,6 +402,7 @@ rescueai/
 │   ├── test_dedup.py            # Deduplication tests
 │   ├── test_verify.py           # Verification tests
 │   ├── test_scoring.py          # Scoring tests
+│   ├── test_dispatch.py         # Dispatch tests
 │   ├── examples_dedup.py        # Dedup usage examples
 │   ├── examples_verify.py       # Verification usage examples
 │   └── examples_scoring.py      # Scoring usage examples
@@ -371,7 +439,13 @@ rescueai/
    python test_dedup.py      # Test deduplication
    python test_verify.py     # Test verification
    python test_scoring.py    # Test urgency scoring
+   python test_dispatch.py   # Test team dispatch
    ```
+
+4. **Try the API:**
+   - Visit http://localhost:8000/docs for interactive API documentation
+   - Test dispatch recommendations: `GET /api/reports/{id}/recommend-dispatch`
+   - Assign teams: `POST /api/reports/{id}/assign`
 
 ## 🔧 Database Management
 

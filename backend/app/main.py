@@ -4,6 +4,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 
 from app.scheduler import start_scheduler, shutdown_scheduler, get_scheduler_status
+from app.routes import router
 
 
 @asynccontextmanager
@@ -37,6 +38,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include API routes
+app.include_router(router, prefix="/api", tags=["api"])
+
 
 @app.get("/")
 async def root():
@@ -44,7 +48,9 @@ async def root():
     return {
         "message": "RescueAI API",
         "version": "1.0.0",
-        "status": "operational"
+        "status": "operational",
+        "docs": "/docs",
+        "api_prefix": "/api"
     }
 
 
