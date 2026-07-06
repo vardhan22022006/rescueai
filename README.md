@@ -29,8 +29,13 @@ RescueAI is an intelligent disaster response management system designed to help 
   - Text similarity analysis (TF-IDF cosine similarity > 0.6)
   - Corroboration system (duplicates increase confidence, not discarded)
   - Automatic merging of people counts and vulnerability flags
-- Multi-level verification system (satellite, weather, corroboration)
-- Urgency scoring algorithm (boosted by corroboration)
+- **External verification system**
+  - OpenWeatherMap API integration (optional, free tier)
+  - Satellite data verification (mock with pluggable architecture)
+  - Multi-signal verification (satellite > weather > corroboration)
+  - Never auto-rejects reports (false negatives cost lives)
+  - Smart urgency adjustment based on verification confidence
+- Urgency scoring algorithm (boosted by corroboration and verification)
 
 ### Team Coordination
 - Multiple team types (NDRF, SDRF, NGO, volunteer)
@@ -189,6 +194,46 @@ python test_dedup.py
 
 See `backend/app/pipeline/README.md` for detailed documentation.
 
+## ✅ Verification System
+
+RescueAI verifies reports using external data sources with a **pluggable architecture** - works with zero setup (mock data) or real APIs.
+
+### Data Sources
+
+1. **Weather Alerts** - OpenWeatherMap API (optional)
+   - Get free API key: https://openweathermap.org/api
+   - 1,000 calls/day, no credit card needed
+   - Falls back to realistic mock data if no key
+
+2. **Satellite Data** - Currently mocked (pluggable for real APIs)
+   - Ready for Sentinel Hub, NASA MODIS, Google Earth Engine
+   - Demo affected zones defined for testing
+
+### Verification Hierarchy
+
+Reports verified using **strongest signal**:
+1. 🛰️ **Satellite Confirmation** (highest) - Location in detected flood/disaster zone
+2. 🌦️ **Weather Confirmation** - Active weather alerts match disaster type  
+3. 👥 **Corroboration** - Multiple independent reports (2+)
+4. ❓ **Unverified** - Single report, no external data (NEVER rejected)
+
+### Philosophy: Never Auto-Reject
+
+**False negatives cost lives.** Unverified reports:
+- ✅ Remain active in the system
+- ✅ Shown to response teams
+- ⚠️ Slightly lower urgency (-0.05)
+- ❌ Never auto-rejected
+
+### Testing Verification
+
+```bash
+cd backend
+python test_verify.py
+```
+
+See `backend/app/pipeline/README.md` for detailed documentation.
+
 ## 🔌 API Endpoints
 
 ### Health Check
@@ -220,6 +265,7 @@ rescueai/
 │   │   └── pipeline/            # Processing pipelines
 │   │       ├── __init__.py
 │   │       ├── dedup.py         # Deduplication logic
+│   │       ├── verify.py        # Verification logic
 │   │       └── README.md        # Pipeline documentation
 │   ├── .env                     # Environment variables
 │   ├── .env.example             # Example environment file
@@ -229,7 +275,10 @@ rescueai/
 │   ├── main.py                  # Entry point
 │   ├── requirements.txt         # Python dependencies
 │   ├── seed_data.py             # Database seeding script
-│   └── test_dedup.py            # Deduplication tests
+│   ├── test_dedup.py            # Deduplication tests
+│   ├── test_verify.py           # Verification tests
+│   ├── examples_dedup.py        # Dedup usage examples
+│   └── examples_verify.py       # Verification usage examples
 ├── frontend/
 │   ├── public/                  # Static assets
 │   ├── src/
@@ -256,6 +305,13 @@ rescueai/
    - Visit http://localhost:5173
    - Check that the system status shows "Backend API: Connected"
    - Verify the health check timestamp updates
+
+3. **Test Pipelines:**
+   ```bash
+   cd backend
+   python test_dedup.py      # Test deduplication
+   python test_verify.py     # Test verification
+   ```
 
 ## 🔧 Database Management
 
@@ -317,6 +373,8 @@ npm run preview  # Preview production build locally
 - Faker 22.0.0 (for seed data)
 - Pydantic 2.5.3
 - scikit-learn 1.3.2 (for deduplication)
+- requests 2.31.0 (for API integration)
+- shapely 2.0.2 (for geospatial operations)
 
 **Frontend:**
 - React 18.2.0

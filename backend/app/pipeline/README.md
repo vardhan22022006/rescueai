@@ -271,3 +271,333 @@ def process_incoming_report(message):
 - Clustering for multi-report incidents
 - Real-time duplicate alerts to response teams
 - Confidence scores based on reporter history
+
+
+---
+
+# RescueAI Verification Pipeline
+
+## Overview
+
+The verification pipeline cross-checks disaster reports against external data sources to assess authenticity and urgency. The system uses a **pluggable architecture** allowing easy integration with real APIs or fallback to mock data for zero-setup development.
+
+## Core Philosophy
+
+**⚠️ NEVER AUTO-REJECT REPORTS ⚠️**
+
+False negatives cost lives. The verification system:
+- Never marks reports as "rejected" automatically
+- Only adjusts confidence and urgency scores
+- Keeps unverified reports active in the system
+- Slightly downweights unverified single reports (-0.05 urgency)
+
+## Data Sources
+
+### 1. Weather Alert Integration
+
+**Function:** `get_weather_alert(lat, lon, disaster_type)`
+
+**Real API:** OpenWeatherMap (Free Tier)
+- 1,000 calls/day
+- No credit card required
+- Current conditions + weather alerts
+- Get API key: https://openweathermap.org/api
+
+**Setup:**
+```bash
+# Add to backend/.env
+OPENWEATHER_API_KEY=your_key_here
+```
+
+**Mock Fallback:** If no API key configured, returns realistic mock data based on location
+
+**Checks:**
+- Active weather alerts for the location
+- Current conditions (rainfall, wind speed)
+- Matches disaster type to weather patterns
+
+### 2. Satellite Data Integration
+
+**Function:** `get_satellite_flood_extent(lat, lon)`
+
+**Current:** Mock with hardcoded affected zone polygons
+
+**Real API Integration (Future):**
+- Sentinel Hub (ESA Copernicus) - SAR flood detection
+- NASA MODIS flood mapping
+- Google Earth Engine
+- Planet Labs
+
+**Mock Coverage:**
+- Flood zones: 23.45-23.55°N, 87.45-87.55°E
+- Earthquake zones: 23.40-23.60°N, 87.40-87.60°E
+- Cyclone zones: 23.30-23.70°N, 87.30-87.70°E
+
+## Verification Hierarchy
+
+Reports are verified using the **strongest available signal**:
+
+### 1. Satellite Confirmation (Highest)
+- Confidence: 0.85-0.90
+- Status: `satellite_confirmed`
+- Urgency boost: +0.20
+- **Example:** Report location falls within satellite-detected flood extent
+
+### 2. Weather Confirmation
+- Confidence: 0.70-0.85
+- Status: `weather_confirmed`
+- Urgency boost: +0.15
+- **Example:** Weather API shows active flood warning matching report
+
+### 3. Corroboration
+- Confidence: 0.80
+- Status: `corroborated`
+- Urgency boost: +0.10
+- **Example:** 2+ independent reports of same incident
+
+### 4. Unverified (NOT Rejected)
+- Status: `unverified`
+- Urgency adjustment: -0.05 (slight downweight)
+- **Report remains active** - false negatives cost lives
+
+## Usage
+
+### Basic Verification
+
+```python
+from app.pipeline.verify import verify_report
+from app.database import SessionLocal
+
+db = SessionLocal()
+
+# Verify a single report
+result = verify_report(report, db)
+
+print(f"Status: {result['new_status']}")
+print(f"Signals: {result['signals']}")
+print(f"Confidence: {result['confidence_scores']}")
+
+db.close()
+```
+
+### Batch Verification
+
+```python
+from app.pipeline.verify import verify_all_unverified_reports
+
+# Verify all unverified reports (or limit to N)
+results = verify_all_unverified_reports(db, limit=100)
+
+print(f"Verified: {results['total_verified']}")
+print(f"Status changes: {results['status_changes']}")
+```
+
+### API Integration
+
+```python
+@app.post("/api/reports")
+async def create_report(report_data: ReportCreate, bg: BackgroundTasks, db: Session):
+    # Create report
+    report = Report(**report_data.dict())
+    db.add(report)
+    db.commit()
+    
+    # Verify in background
+    bg.add_task(verify_report, report, db)
+    
+    return {"report_id": report.id, "status": "created"}
+```
+
+## Verification Results
+
+The `verify_report()` function returns:
+
+```python
+{
+    'report_id': str,
+    'original_status': str,
+    'new_status': str,
+    'status_changed': bool,
+    'signals': {
+        'corroboration': bool,
+        'weather_alert': bool,
+        'satellite': bool
+    },
+    'confidence_scores': {
+        'corroboration': float,
+        'weather': float,
+        'satellite': float
+    },
+    'details': [str],  # Human-readable details
+    'urgency_adjustment': float  # Change in urgency score
+}
+```
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Optional - Leave empty to use mock data
+OPENWEATHER_API_KEY=your_api_key_here
+```
+
+### Demo Affected Zones
+
+Edit `verify.py` to customize mock polygon zones:
+
+```python
+DEMO_FLOOD_AFFECTED_ZONES = [
+    Polygon([
+        (lon1, lat1),
+        (lon2, lat2),
+        (lon3, lat3),
+        (lon4, lat4)
+    ])
+]
+```
+
+## Swapping in Real APIs
+
+The system is designed for easy API integration:
+
+### Step 1: Implement Real Function
+
+```python
+def _get_weather_alert_api(lat, lon, disaster_type):
+    # Your real API implementation
+    response = requests.get(api_url, params={...})
+    return {
+        'alert_found': bool,
+        'confidence': float,
+        'source': 'your_api',
+        'details': str
+    }
+```
+
+### Step 2: Update get_weather_alert()
+
+```python
+def get_weather_alert(lat, lon, disaster_type, use_mock=None):
+    if use_mock or not settings.your_api_key:
+        return _get_weather_alert_mock(...)
+    else:
+        return _get_weather_alert_api(...)  # Your implementation
+```
+
+### Step 3: Add Configuration
+
+```python
+# config.py
+class Settings(BaseSettings):
+    your_api_key: Optional[str] = None
+```
+
+## Testing
+
+Run the verification test suite:
+
+```bash
+cd backend
+python test_verify.py
+```
+
+Tests cover:
+1. Weather alert detection (mock)
+2. Satellite data detection
+3. Satellite-confirmed reports
+4. Weather-confirmed reports
+5. Corroborated reports
+6. Unverified reports (no rejection)
+7. Batch verification
+
+## Integration Examples
+
+See `backend/examples_verify.py` for:
+- Single report verification
+- API endpoint integration
+- Scheduled batch verification
+- Webhook-triggered verification
+- Custom data source integration
+- Monitoring and metrics
+
+## Performance Considerations
+
+### API Rate Limits
+
+**OpenWeatherMap Free Tier:**
+- 1,000 calls/day
+- ~40 calls/hour average
+
+**Strategy:**
+- Cache weather data for 1 hour per location
+- Batch verify reports periodically (not per-report)
+- Use mock data during development
+
+### Optimization Tips
+
+1. **Batch Processing:** Verify reports in batches rather than individually
+2. **Caching:** Cache weather/satellite data for locations
+3. **Background Jobs:** Run verification asynchronously
+4. **Rate Limiting:** Implement exponential backoff for API calls
+5. **Fallback:** Always have mock fallback for reliability
+
+## Monitoring
+
+Track verification metrics:
+
+```python
+# Reports by verification status
+SELECT verification_status, COUNT(*) 
+FROM reports 
+GROUP BY verification_status;
+
+# Average urgency by status
+SELECT verification_status, AVG(urgency_score)
+FROM reports
+GROUP BY verification_status;
+
+# Verification source distribution
+# (Track in application logs)
+```
+
+## Future Enhancements
+
+1. **Real Satellite Integration**
+   - Sentinel Hub API
+   - NASA MODIS flood products
+   - Google Earth Engine
+
+2. **Additional Data Sources**
+   - Seismic monitoring (USGS earthquake API)
+   - River gauge data (for floods)
+   - Social media sentiment analysis
+   - News article verification
+
+3. **Machine Learning**
+   - Historical pattern matching
+   - Anomaly detection
+   - Confidence score optimization
+
+4. **Advanced Features**
+   - Multi-source confidence fusion
+   - Temporal verification (check historical patterns)
+   - Spatial clustering for incident confirmation
+
+## Best Practices
+
+1. ✅ **Never Auto-Reject:** Keep all reports active
+2. ✅ **Multiple Signals:** Use all available data sources
+3. ✅ **Graceful Degradation:** Fall back to mock if APIs fail
+4. ✅ **Background Processing:** Don't block report creation
+5. ✅ **Monitor Performance:** Track API usage and success rates
+6. ✅ **Cache Strategically:** Reduce API calls with smart caching
+7. ✅ **Document Sources:** Always indicate data source in responses
+
+## Security & Privacy
+
+- API keys stored in environment variables
+- Never log API responses containing PII
+- Rate limit API calls to prevent abuse
+- Validate all external data before use
+- Use HTTPS for all API communications
