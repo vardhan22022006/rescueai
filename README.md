@@ -35,7 +35,15 @@ RescueAI is an intelligent disaster response management system designed to help 
   - Multi-signal verification (satellite > weather > corroboration)
   - Never auto-rejects reports (false negatives cost lives)
   - Smart urgency adjustment based on verification confidence
-- Urgency scoring algorithm (boosted by corroboration and verification)
+- **Transparent urgency scoring** (0-100 scale)
+  - Judge-friendly: Explainable weighted formula, not black-box AI
+  - Log-scale people scoring (prevents single factor dominance)
+  - Vulnerable population weighting (+15 per type)
+  - Verification confidence scoring (satellite > weather > corroboration)
+  - Time decay (+5/hour for delayed reports)
+  - Disaster type multipliers (earthquake ×1.2, less warning time)
+  - **Full breakdown stored** - Dashboard shows WHY each score
+  - **Auto re-scoring** every 5 minutes via APScheduler
 
 ### Team Coordination
 - Multiple team types (NDRF, SDRF, NGO, volunteer)
@@ -62,6 +70,7 @@ RescueAI is an intelligent disaster response management system designed to help 
 - `corroboration_count` - Number of duplicate reports corroborating this incident
 - `verification_status` - Enum: unverified, corroborated, satellite_confirmed, weather_confirmed, rejected
 - `urgency_score` - Float 0-1 priority score
+- `urgency_breakdown` - JSON breakdown of scoring factors (transparency!)
 - `status` - Enum: new, in_progress, resolved, false_report
 - `assigned_team` - Team name handling the report
 - `created_at/updated_at` - Timestamps
@@ -234,6 +243,52 @@ python test_verify.py
 
 See `backend/app/pipeline/README.md` for detailed documentation.
 
+## 🎯 Urgency Scoring System
+
+RescueAI uses a **transparent, explainable** urgency scoring system (0-100 scale) - perfect for explaining to judges and stakeholders.
+
+### Why Transparent Scoring?
+
+**Not a black box** - Every factor and its contribution is visible. Response teams can see WHY a report has its priority.
+
+### Scoring Formula
+
+**Base Factors (Additive):**
+1. 👥 **People Affected** (0-30 pts) - Log scale prevents dominance
+2. 🚨 **Vulnerable Populations** (0-45 pts) - +15 per type (elderly, child, pregnant, disabled)
+3. ✅ **Verification Status** (0-25 pts) - Satellite (25) > Weather (20) > Corroborated (10)
+4. 🤝 **Corroboration** (0-20 pts) - +5 per independent report
+5. ⏰ **Time Decay** (0-20 pts) - +5/hour over 2h threshold (delayed help = higher risk)
+
+**Disaster Multiplier:** Earthquake ×1.2, Cyclone ×1.1, Flood ×1.0
+
+**Result:** Every report gets a score + JSON breakdown explaining the WHY
+
+### Example Breakdown
+
+```json
+{
+  "final_score": 78.5,
+  "summary": "HIGH urgency driven by vulnerable populations and verification",
+  "factors": {
+    "people": {"score": 18.5, "explanation": "50 people (log scale)"},
+    "vulnerable": {"score": 30.0, "explanation": "elderly, child (+30)"},
+    "verification": {"score": 20.0, "explanation": "Weather confirmed (+20)"}
+  }
+}
+```
+
+### Automatic Re-Scoring
+
+Background scheduler (APScheduler) re-scores all active reports **every 5 minutes** to apply time decay.
+
+### Testing Scoring
+
+```bash
+cd backend
+python test_scoring.py
+```
+
 ## 🔌 API Endpoints
 
 ### Health Check
@@ -266,6 +321,7 @@ rescueai/
 │   │       ├── __init__.py
 │   │       ├── dedup.py         # Deduplication logic
 │   │       ├── verify.py        # Verification logic
+│   │       ├── scoring.py       # Urgency scoring logic
 │   │       └── README.md        # Pipeline documentation
 │   ├── .env                     # Environment variables
 │   ├── .env.example             # Example environment file
@@ -273,12 +329,15 @@ rescueai/
 │   ├── alembic.ini              # Alembic config
 │   ├── config.py                # Application config
 │   ├── main.py                  # Entry point
+│   ├── scheduler.py             # Background job scheduler
 │   ├── requirements.txt         # Python dependencies
 │   ├── seed_data.py             # Database seeding script
 │   ├── test_dedup.py            # Deduplication tests
 │   ├── test_verify.py           # Verification tests
+│   ├── test_scoring.py          # Scoring tests
 │   ├── examples_dedup.py        # Dedup usage examples
-│   └── examples_verify.py       # Verification usage examples
+│   ├── examples_verify.py       # Verification usage examples
+│   └── examples_scoring.py      # Scoring usage examples
 ├── frontend/
 │   ├── public/                  # Static assets
 │   ├── src/
@@ -311,6 +370,7 @@ rescueai/
    cd backend
    python test_dedup.py      # Test deduplication
    python test_verify.py     # Test verification
+   python test_scoring.py    # Test urgency scoring
    ```
 
 ## 🔧 Database Management
@@ -375,6 +435,7 @@ npm run preview  # Preview production build locally
 - scikit-learn 1.3.2 (for deduplication)
 - requests 2.31.0 (for API integration)
 - shapely 2.0.2 (for geospatial operations)
+- APScheduler 3.10.4 (for background jobs)
 
 **Frontend:**
 - React 18.2.0

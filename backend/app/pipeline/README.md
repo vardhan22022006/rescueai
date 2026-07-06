@@ -601,3 +601,387 @@ GROUP BY verification_status;
 - Rate limit API calls to prevent abuse
 - Validate all external data before use
 - Use HTTPS for all API communications
+
+
+---
+
+# RescueAI Urgency Scoring System
+
+## Overview
+
+The urgency scoring system calculates a 0-100 score for each disaster report using a **transparent, weighted formula**. Every factor and its contribution is tracked and visible—crucial for trust with response teams and explainability to judges/stakeholders.
+
+## Core Philosophy
+
+**Transparency Builds Trust**
+
+- All scoring factors are explicitly calculated and stored
+- Every report includes a JSON breakdown showing how the score was computed
+- No black-box algorithms—responders can see WHY a report has its priority
+- Perfect for explaining to non-technical stakeholders and judges
+
+## Scoring Formula
+
+### Base Factors (Additive, 0-100 range)
+
+1. **People Affected** (0-30 points)
+   - Logarithmic scale: `10 + 8 × log10(num_people + 1)`
+   - Prevents single huge number from dominating
+   - Example: 10 people = 18pts, 100 people = 26pts, 1000 people = 34pts (capped at 30)
+
+2. **Vulnerable Populations** (0-45 points)
+   - +15 points per flag type present
+   - Flags: elderly, child, pregnant, disabled
+   - Capped at 45 (max 3 types counted)
+   - Example: elderly + child = 30pts
+
+3. **Verification Status** (0-25 points)
+   - Unverified: 0
+   - Corroborated: +10
+   - Weather confirmed: +20
+   - Satellite confirmed: +25
+
+4. **Corroboration Count** (0-20 points)
+   - +5 per additional independent report
+   - Capped at 20 (max 4 counted)
+   - Example: 3 corroborations = 15pts
+
+5. **Time Decay** (0-20 points)
+   - Reports >2 hours old without update get urgency boost
+   - +5 per hour over threshold
+   - Capped at 20 (max 4 hours counted)
+   - **Rationale:** Delayed help compounds risk
+
+### Disaster Type Multiplier (1.0-1.2×)
+
+Applied to base score to reflect warning time differences:
+- **Earthquake**: ×1.2 (minimal warning time)
+- **Cyclone**: ×1.1 (limited warning)
+- **Flood**: ×1.0 (more warning time)
+- **Other**: ×1.0
+
+### Final Score
+
+`final_score = min(base_score × multiplier, 100)`
+
+## Scoring Breakdown Structure
+
+Every report stores a JSON breakdown:
+
+```json
+{
+  "final_score": 78.5,
+  "base_score": 65.4,
+  "factors": {
+    "people": {
+      "score": 18.5,
+      "explanation": "50 people (log scale: 18.5/30)"
+    },
+    "vulnerable": {
+      "score": 30.0,
+      "explanation": "2 vulnerable group(s): elderly, child (+30)"
+    },
+    "verification": {
+      "score": 20.0,
+      "explanation": "Weather data confirms (+20)"
+    },
+    "corroboration": {
+      "score": 10.0,
+      "explanation": "2 corroborating report(s) (+10)"
+    },
+    "time_decay": {
+      "score": 5.0,
+      "explanation": "Report 3.0h old, no update for 1.0h (+5)"
+    }
+  },
+  "multiplier": {
+    "value": 1.2,
+    "explanation": "Earthquake: Minimal warning time (×1.2)"
+  },
+  "summary": "HIGH urgency (79/100) driven primarily by vulnerable populations and verification",
+  "timestamp": "2026-07-06T12:34:56Z"
+}
+```
+
+## Usage
+
+### Basic Scoring
+
+```python
+from app.pipeline.scoring import compute_urgency_score
+
+# Calculate score
+score, breakdown = compute_urgency_score(report)
+
+print(f"Score: {score}/100")
+print(f"Summary: {breakdown['summary']}")
+```
+
+### Update Report with Score
+
+```python
+from app.pipeline.scoring import update_report_urgency
+
+# Calculate and store
+breakdown = update_report_urgency(report, db)
+
+# Score and breakdown now stored on report
+print(report.urgency_score)        # 78.5
+print(report.urgency_breakdown)    # Full JSON breakdown
+```
+
+### Get Explanation
+
+```python
+from app.pipeline.scoring import get_urgency_explanation
+
+# Get stored or fresh breakdown
+explanation = get_urgency_explanation(report)
+
+# Display to user
+for factor_name, factor_data in explanation['factors'].items():
+    if factor_data['score'] > 0:
+        print(f"{factor_name}: +{factor_data['score']} - {factor_data['explanation']}")
+```
+
+### Batch Re-scoring
+
+```python
+from app.pipeline.scoring import rescore_all_active_reports
+
+# Re-score all active reports (applies time decay)
+results = rescore_all_active_reports(db)
+
+print(f"Rescored {results['total_rescored']} reports")
+print(f"Scores increased: {results['scores_increased']}")
+```
+
+## Automatic Re-scoring
+
+The system automatically re-scores reports via background scheduler:
+
+### Scheduler Configuration
+
+- **Runs every**: 5 minutes
+- **Target**: All active (new/in_progress) reports
+- **Purpose**: Apply time decay to aging reports
+- **Library**: APScheduler (BackgroundScheduler)
+
+### Scheduler Integration
+
+```python
+# In app/main.py
+from app.scheduler import start_scheduler, shutdown_scheduler
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    start_scheduler()
+    yield
+    # Shutdown
+    shutdown_scheduler()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+### Manual Trigger
+
+```python
+from app.scheduler import run_rescore_now
+
+# Manually trigger rescoring
+results = run_rescore_now()
+```
+
+## Dashboard Display
+
+### Urgency Levels
+
+```python
+if score >= 80:
+    level = "🔴 CRITICAL"
+    color = "red"
+elif score >= 60:
+    level = "🟠 HIGH"
+    color = "orange"
+elif score >= 40:
+    level = "🟡 MEDIUM"
+    color = "yellow"
+else:
+    level = "🔵 LOW"
+    color = "blue"
+```
+
+### Factor Visualization
+
+Display each factor's contribution:
+- Show score/max (e.g., "18.5/30")
+- Display explanation text
+- Visual progress bars
+- Highlight factors contributing >20%
+
+### Summary Card
+
+```
+┌─────────────────────────────────┐
+│ Urgency Score: 78/100           │
+│ Level: 🟠 HIGH                  │
+├─────────────────────────────────┤
+│ HIGH urgency (78/100) driven   │
+│ primarily by vulnerable         │
+│ populations and verification    │
+├─────────────────────────────────┤
+│ Contributing Factors:           │
+│ • Vulnerable: +30               │
+│ • Verification: +20             │
+│ • People: +18                   │
+│ • Time Decay: +5                │
+│ • Corroboration: +10            │
+│                                 │
+│ Base: 83 × Earthquake (1.2)    │
+│ = 78 (capped at 100)            │
+└─────────────────────────────────┘
+```
+
+## Testing
+
+Run the scoring test suite:
+
+```bash
+cd backend
+python test_scoring.py
+```
+
+Tests cover:
+1. People affected (log scale validation)
+2. Vulnerable population scoring
+3. Verification status scoring
+4. Corroboration counting
+5. Disaster type multipliers
+6. Time decay calculation
+7. Complete high-urgency scenario
+8. Transparency verification
+9. Database integration
+10. Batch rescoring
+11. Configuration access
+
+## Configuration
+
+All scoring parameters are in `scoring.py`:
+
+```python
+SCORING_CONFIG = {
+    'people_base': 10,
+    'people_log_multiplier': 8,
+    'people_max_score': 30,
+    
+    'vulnerable_per_flag': 15,
+    'vulnerable_max_score': 45,
+    
+    'verification_scores': {...},
+    
+    'corroboration_per_report': 5,
+    'corroboration_max_score': 20,
+    
+    'disaster_multipliers': {...},
+    
+    'time_decay_per_hour': 5,
+    'time_decay_threshold_hours': 2,
+    'time_decay_max_score': 20
+}
+```
+
+**All parameters are tunable** based on field experience!
+
+## API Endpoints
+
+### Get Urgency Breakdown
+
+```http
+GET /api/reports/{report_id}/urgency
+
+Response:
+{
+  "report_id": "...",
+  "urgency_score": 78.5,
+  "summary": "HIGH urgency...",
+  "breakdown": {...},
+  "visual_data": {
+    "level": "HIGH",
+    "color": "#EA580C",
+    "percentage": 78.5
+  }
+}
+```
+
+### Priority Queue
+
+```http
+GET /api/reports/priority-queue?limit=20&min_score=40
+
+Response:
+{
+  "priority_queue": [
+    {
+      "id": "...",
+      "urgency_score": 87.5,
+      "summary": "CRITICAL urgency...",
+      ...
+    }
+  ]
+}
+```
+
+### Scoring Configuration
+
+```http
+GET /api/scoring/config
+
+Response:
+{
+  "scoring_config": {...},
+  "description": {...},
+  "philosophy": "Transparent, explainable..."
+}
+```
+
+## Transparency Benefits
+
+### For Response Teams
+
+✅ **Understand priorities** - See why one report ranks higher  
+✅ **Trust the system** - No black-box algorithms  
+✅ **Make informed decisions** - Full context available  
+✅ **Explain to superiors** - Clear rationale for actions
+
+### For Judges/Stakeholders
+
+✅ **Explainable AI** - Every calculation visible  
+✅ **Fair scoring** - Log-scale prevents dominance  
+✅ **Real-world logic** - Time decay reflects urgency  
+✅ **Audit trail** - JSON breakdown stored with report
+
+### For Development
+
+✅ **Debuggable** - Can trace why score changed  
+✅ **Tunable** - All parameters configurable  
+✅ **Testable** - Breakdown enables unit tests  
+✅ **Extensible** - Easy to add new factors
+
+## Best Practices
+
+1. **Always store breakdown** - Use `update_report_urgency()` not just `compute_urgency_score()`
+2. **Display to users** - Show factor contributions in UI
+3. **Re-score on changes** - After verification, corroboration, or updates
+4. **Run periodic rescoring** - Keep time decay current (scheduler does this)
+5. **Explain to stakeholders** - Use breakdown for transparency
+6. **Monitor score distribution** - Track if scores cluster or spread well
+7. **Tune based on feedback** - Adjust SCORING_CONFIG with field experience
+
+## Future Enhancements
+
+- **Machine learning weights** - Learn optimal weights from historical outcomes
+- **Geographic factors** - Adjust for remote areas with limited resources
+- **Resource availability** - Lower score if nearby teams available
+- **Historical patterns** - Learn from past incidents in same area
+- **Severity prediction** - Use early indicators to adjust scores

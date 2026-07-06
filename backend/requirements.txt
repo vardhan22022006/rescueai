@@ -9,3 +9,4 @@ pydantic-settings==2.1.0
 scikit-learn==1.3.2
 requests==2.31.0
 shapely==2.0.2
+apscheduler==3.10.4

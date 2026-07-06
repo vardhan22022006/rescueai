@@ -70,6 +70,7 @@ class Report(Base):
         default=VerificationStatusEnum.unverified
     )
     urgency_score = Column(Float, nullable=False, default=0.0)
+    urgency_breakdown = Column(JSON, nullable=True, default=dict)
     status = Column(Enum(StatusEnum), nullable=False, default=StatusEnum.new)
     assigned_team = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
