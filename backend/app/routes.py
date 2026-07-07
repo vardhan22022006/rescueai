@@ -5,15 +5,17 @@ Endpoints for:
 - Report management
 - Team dispatch
 - Urgency recommendations
+- Demo simulation
 """
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
+import uuid
 
 from app.database import get_db
-from app.models import Report, Team, StatusEnum, TeamStatusEnum
+from app.models import Report, Team, StatusEnum, TeamStatusEnum, DisasterTypeEnum, SourceEnum, VerificationStatusEnum
 from app.pipeline.dispatch import (
     recommend_dispatch,
     assign_team_to_report,
@@ -23,6 +25,167 @@ from app.pipeline.dispatch import (
 from app.pipeline.scoring import get_urgency_explanation
 
 router = APIRouter()
+
+
+# ==================== Demo Simulation ====================
+
+@router.post("/demo/simulate-burst")
+async def simulate_burst(db: Session = Depends(get_db)):
+    """
+    DEMO ENDPOINT: Simulate a burst of 15 incoming disaster reports.
+    
+    Generates reports over 30 seconds to demonstrate:
+    - Real-time dashboard updates
+    - Automatic deduplication
+    - Urgency re-ranking
+    - Verification status changes
+    - Team dispatch recommendations
+    
+    Use this during demos to show the "thousands of reports flooding in" scenario.
+    
+    Returns:
+    - Total reports created
+    - Mix of disaster types
+    - Some duplicates (will be auto-detected)
+    - Some with vulnerable populations
+    """
+    import asyncio
+    import random
+    from faker import Faker
+    from app.pipeline.dedup import find_duplicates
+    from app.pipeline.scoring import update_report_urgency
+    
+    fake = Faker()
+    created_reports = []
+    
+    # Base locations for clustering (to create duplicates)
+    hotspots = [
+        {"lat": 23.5, "lon": 87.5, "text": "Railway Station area"},
+        {"lat": 23.52, "lon": 87.52, "text": "Market district"},
+        {"lat": 23.48, "lon": 87.48, "text": "Residential zone near river"}
+    ]
+    
+    # Report templates
+    disaster_scenarios = {
+        DisasterTypeEnum.flood: [
+            "Severe flooding in {location}. Water level rising rapidly. {people} people trapped.",
+            "Flash flood emergency at {location}. Need immediate evacuation. {people} families stranded.",
+            "Flood water entered homes in {location}. {people} people need rescue.",
+        ],
+        DisasterTypeEnum.earthquake: [
+            "Building collapsed in {location} after earthquake. {people} people buried in debris.",
+            "Earthquake damage severe at {location}. {people} people injured, need medical help.",
+            "Houses damaged by earthquake near {location}. {people} people homeless.",
+        ],
+        DisasterTypeEnum.cyclone: [
+            "Cyclone damage in {location}. Roofs blown off. {people} people exposed.",
+            "Strong winds destroyed homes at {location}. {people} families need shelter.",
+            "Cyclone hit {location} hard. Trees fallen, {people} people trapped.",
+        ]
+    }
+    
+    vulnerable_options = [
+        [],
+        ["elderly"],
+        ["child"],
+        ["pregnant"],
+        ["elderly", "child"],
+        ["disabled"],
+        ["elderly", "disabled"]
+    ]
+    
+    # Create 15 reports over time
+    for i in range(15):
+        # Add slight delay to simulate real-time (but faster than 30s total for demo)
+        if i > 0:
+            await asyncio.sleep(2)  # 2 seconds between reports = 30s total
+        
+        # Pick disaster type
+        disaster_type = random.choice(list(DisasterTypeEnum))
+        
+        # 40% chance to create near a hotspot (potential duplicate)
+        if random.random() < 0.4 and hotspots:
+            hotspot = random.choice(hotspots)
+            # Add small variance
+            lat = hotspot["lat"] + random.uniform(-0.002, 0.002)  # ~200m variance
+            lon = hotspot["lon"] + random.uniform(-0.002, 0.002)
+            location_text = hotspot["text"]
+        else:
+            # Random location
+            lat = 23.5 + random.uniform(-0.1, 0.1)
+            lon = 87.5 + random.uniform(-0.1, 0.1)
+            location_text = fake.city()
+        
+        # Generate report text
+        if disaster_type in disaster_scenarios:
+            template = random.choice(disaster_scenarios[disaster_type])
+            people_count = random.randint(5, 50)
+            raw_text = template.format(
+                location=location_text,
+                people=people_count
+            )
+        else:
+            raw_text = f"Emergency situation at {location_text}. {random.randint(5, 30)} people affected."
+            people_count = random.randint(5, 30)
+        
+        # Create report
+        report = Report(
+            id=str(uuid.uuid4()),
+            source=random.choice([SourceEnum.app, SourceEnum.sms, SourceEnum.whatsapp]),
+            raw_text=raw_text,
+            language=random.choice(["en", "hi", "bn"]),
+            translated_text=raw_text,
+            reporter_phone=fake.phone_number(),
+            latitude=lat,
+            longitude=lon,
+            location_text=location_text,
+            disaster_type=disaster_type,
+            num_people=people_count,
+            vulnerable_flags=random.choice(vulnerable_options),
+            verification_status=VerificationStatusEnum.unverified,
+            status=StatusEnum.new,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        db.add(report)
+        db.commit()
+        db.refresh(report)
+        
+        # Check for duplicates
+        find_duplicates(report, db)
+        
+        # Calculate urgency
+        update_report_urgency(report, db)
+        
+        created_reports.append({
+            "id": report.id,
+            "disaster_type": report.disaster_type.value,
+            "urgency_score": report.urgency_score,
+            "num_people": report.num_people,
+            "is_duplicate": report.is_duplicate_of is not None
+        })
+    
+    # Summary statistics
+    disaster_counts = {}
+    for disaster_type in DisasterTypeEnum:
+        count = len([r for r in created_reports if r["disaster_type"] == disaster_type.value])
+        if count > 0:
+            disaster_counts[disaster_type.value] = count
+    
+    duplicate_count = len([r for r in created_reports if r["is_duplicate"]])
+    
+    return {
+        "success": True,
+        "simulation": "burst",
+        "total_created": len(created_reports),
+        "duplicates_detected": duplicate_count,
+        "unique_incidents": len(created_reports) - duplicate_count,
+        "by_disaster_type": disaster_counts,
+        "reports": created_reports,
+        "message": f"Created {len(created_reports)} reports over 30 seconds. {duplicate_count} duplicates auto-detected and merged.",
+        "demo_tip": "Refresh your dashboard to see real-time updates and urgency re-ranking!"
+    }
 
 
 # ==================== Report Endpoints ====================
