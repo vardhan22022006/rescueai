@@ -35,7 +35,7 @@ def rescore_job():
     try:
         results = rescore_all_active_reports(db)
         
-        print(f"  ✓ Rescored {results['total_rescored']} active reports")
+        print(f"  [OK] Rescored {results['total_rescored']} active reports")
         print(f"    - {results['scores_increased']} increased")
         print(f"    - {results['scores_decreased']} decreased")
         print(f"    - {results['scores_unchanged']} unchanged")
@@ -44,15 +44,15 @@ def rescore_job():
         if results['details']:
             print(f"  Significant changes (±5 points):")
             for detail in results['details'][:5]:  # Show top 5
-                change_dir = "↑" if detail['change'] > 0 else "↓"
+                change_dir = "+" if detail['change'] > 0 else "-"
                 print(f"    {change_dir} Report {detail['report_id'][:8]}: "
-                      f"{detail['old_score']:.0f} → {detail['new_score']:.0f} "
+                      f"{detail['old_score']:.0f} -> {detail['new_score']:.0f} "
                       f"({detail['change']:+.0f})")
         
         print(f"  Job completed successfully\n")
         
     except Exception as e:
-        print(f"  ✗ Error during rescoring: {e}\n")
+        print(f"  [ERROR] Error during rescoring: {e}\n")
     finally:
         db.close()
 
@@ -87,7 +87,7 @@ def start_scheduler():
     # Start the scheduler
     scheduler.start()
     
-    print("✓ Scheduler started")
+    print("[OK] Scheduler started")
     print("  Jobs:")
     print("    - Re-score active reports: every 5 minutes")
     print("=" * 48 + "\n")
@@ -108,7 +108,7 @@ def shutdown_scheduler():
         print("\n=== Shutting down RescueAI Scheduler ===")
         scheduler.shutdown(wait=True)
         scheduler = None
-        print("✓ Scheduler stopped\n")
+        print("[OK] Scheduler stopped\n")
 
 
 def run_rescore_now():
@@ -129,7 +129,7 @@ def run_rescore_now():
     
     try:
         results = rescore_all_active_reports(db)
-        print(f"✓ Rescored {results['total_rescored']} reports")
+        print(f"[OK] Rescored {results['total_rescored']} reports")
         return results
     finally:
         db.close()

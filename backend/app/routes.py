@@ -10,6 +10,7 @@ Endpoints for:
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import datetime
 
 from app.database import get_db
 from app.models import Report, Team, StatusEnum, TeamStatusEnum
@@ -31,7 +32,11 @@ async def get_report(report_id: str, db: Session = Depends(get_db)):
     """
     Get a single report by ID.
     
-    Returns report with urgency breakdown and assignment info.
+    Returns full report details including:
+    - Urgency breakdown with scoring explanation
+    - Duplicate cluster members
+    - Verification status and details
+    - Assignment information
     """
     report = db.query(Report).filter(Report.id == report_id).first()
     
@@ -41,11 +46,40 @@ async def get_report(report_id: str, db: Session = Depends(get_db)):
     # Get urgency explanation
     urgency_info = get_urgency_explanation(report)
     
+    # Get duplicate cluster members (reports that reference this one as duplicate)
+    duplicate_cluster = []
+    if report.duplicates:  # This report is the primary
+        duplicate_cluster = [
+            {
+                "id": dup.id,
+                "raw_text": dup.raw_text[:100] + "..." if len(dup.raw_text) > 100 else dup.raw_text,
+                "num_people": dup.num_people,
+                "vulnerable_flags": dup.vulnerable_flags,
+                "created_at": dup.created_at.isoformat() + 'Z',
+                "reporter_phone": dup.reporter_phone
+            }
+            for dup in report.duplicates
+        ]
+    
+    # If this report IS a duplicate, get the primary report info
+    primary_report_info = None
+    if report.is_duplicate_of:
+        primary = db.query(Report).filter(Report.id == report.is_duplicate_of).first()
+        if primary:
+            primary_report_info = {
+                "id": primary.id,
+                "disaster_type": primary.disaster_type.value,
+                "urgency_score": primary.urgency_score,
+                "status": primary.status.value
+            }
+    
     return {
         "id": report.id,
         "source": report.source.value,
         "raw_text": report.raw_text,
         "language": report.language,
+        "translated_text": report.translated_text,
+        "reporter_phone": report.reporter_phone,
         "disaster_type": report.disaster_type.value,
         "location": {
             "latitude": report.latitude,
@@ -53,16 +87,23 @@ async def get_report(report_id: str, db: Session = Depends(get_db)):
             "location_text": report.location_text
         },
         "num_people": report.num_people,
-        "vulnerable_flags": report.vulnerable_flags,
+        "vulnerable_flags": report.vulnerable_flags or [],
         "verification_status": report.verification_status.value,
         "urgency": {
             "score": report.urgency_score,
-            "breakdown": urgency_info
+            "breakdown": urgency_info,
+            "explanation": report.urgency_breakdown or {}
         },
         "status": report.status.value,
         "assigned_team": report.assigned_team,
         "corroboration_count": report.corroboration_count,
-        "is_duplicate_of": report.is_duplicate_of,
+        "duplicate_info": {
+            "is_duplicate": report.is_duplicate_of is not None,
+            "is_duplicate_of": report.is_duplicate_of,
+            "primary_report": primary_report_info,
+            "duplicate_cluster": duplicate_cluster,
+            "total_duplicates": len(duplicate_cluster)
+        },
         "created_at": report.created_at.isoformat() + 'Z',
         "updated_at": report.updated_at.isoformat() + 'Z'
     }
@@ -245,6 +286,177 @@ async def unassign_team(
     }
 
 
+@router.patch("/reports/{report_id}/status")
+async def update_report_status(
+    report_id: str,
+    new_status: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Manually update a report's status.
+    
+    Request Body:
+    {
+        "status": "in_progress" | "resolved" | "false_report" | "new"
+    }
+    
+    Example Response:
+    {
+        "success": true,
+        "report_id": "...",
+        "old_status": "new",
+        "new_status": "resolved",
+        "updated_at": "2026-07-06T12:34:56Z"
+    }
+    """
+    # Get report
+    report = db.query(Report).filter(Report.id == report_id).first()
+    
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    
+    # Validate new status
+    try:
+        status_enum = StatusEnum(new_status)
+    except ValueError:
+        valid_statuses = [s.value for s in StatusEnum]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Valid values: {', '.join(valid_statuses)}"
+        )
+    
+    # Store old status
+    old_status = report.status.value
+    
+    # Update status
+    report.status = status_enum
+    report.updated_at = datetime.utcnow()
+    
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    
+    return {
+        "success": True,
+        "report_id": report.id,
+        "old_status": old_status,
+        "new_status": report.status.value,
+        "updated_at": report.updated_at.isoformat() + 'Z'
+    }
+
+
+# ==================== Statistics Endpoints ====================
+
+@router.get("/stats/summary")
+async def get_stats_summary(db: Session = Depends(get_db)):
+    """
+    Get dashboard statistics summary.
+    
+    Returns:
+    - Total active reports (excluding resolved/false_report/duplicates)
+    - Reports by disaster type
+    - Reports by verification status
+    - Average urgency score
+    - Count of vulnerable-flagged cases still unresolved
+    - Teams available vs deployed
+    
+    Example Response:
+    {
+        "reports": {
+            "total_active": 25,
+            "by_disaster_type": {"flood": 10, "earthquake": 8, "cyclone": 7},
+            "by_verification_status": {"unverified": 15, "corroborated": 8, "satellite_confirmed": 2},
+            "by_status": {"new": 10, "in_progress": 12, "resolved": 3},
+            "average_urgency": 65.4,
+            "vulnerable_unresolved": 8
+        },
+        "teams": {
+            "total": 12,
+            "available": 7,
+            "deployed": 5,
+            "by_type": {"NDRF": 4, "SDRF": 3, "NGO": 3, "volunteer": 2}
+        }
+    }
+    """
+    from app.models import DisasterTypeEnum, VerificationStatusEnum, TeamTypeEnum
+    from sqlalchemy import func
+    
+    # Get active reports (exclude resolved, false_report, and duplicates)
+    active_reports = db.query(Report).filter(
+        Report.is_duplicate_of.is_(None),
+        Report.status.in_([StatusEnum.new, StatusEnum.in_progress])
+    ).all()
+    
+    # All reports (excluding duplicates for statistics)
+    all_reports = db.query(Report).filter(Report.is_duplicate_of.is_(None)).all()
+    
+    # Count by disaster type
+    by_disaster_type = {}
+    for disaster_type in DisasterTypeEnum:
+        count = len([r for r in active_reports if r.disaster_type == disaster_type])
+        if count > 0:
+            by_disaster_type[disaster_type.value] = count
+    
+    # Count by verification status
+    by_verification_status = {}
+    for verification_status in VerificationStatusEnum:
+        count = len([r for r in active_reports if r.verification_status == verification_status])
+        if count > 0:
+            by_verification_status[verification_status.value] = count
+    
+    # Count by status (all reports, not just active)
+    by_status = {}
+    for status in StatusEnum:
+        count = len([r for r in all_reports if r.status == status])
+        if count > 0:
+            by_status[status.value] = count
+    
+    # Calculate average urgency
+    if active_reports:
+        average_urgency = round(sum(r.urgency_score for r in active_reports) / len(active_reports), 1)
+    else:
+        average_urgency = 0.0
+    
+    # Count vulnerable-flagged cases still unresolved
+    vulnerable_unresolved = len([
+        r for r in active_reports
+        if r.vulnerable_flags and len(r.vulnerable_flags) > 0
+    ])
+    
+    # Team statistics
+    all_teams = db.query(Team).all()
+    teams_available = len([t for t in all_teams if t.status == TeamStatusEnum.available])
+    teams_deployed = len([t for t in all_teams if t.status == TeamStatusEnum.deployed])
+    
+    # Teams by type
+    by_team_type = {}
+    for team_type in TeamTypeEnum:
+        count = len([t for t in all_teams if t.type == team_type])
+        if count > 0:
+            by_team_type[team_type.value] = count
+    
+    return {
+        "reports": {
+            "total_active": len(active_reports),
+            "total_all": len(all_reports),
+            "by_disaster_type": by_disaster_type,
+            "by_verification_status": by_verification_status,
+            "by_status": by_status,
+            "average_urgency": average_urgency,
+            "vulnerable_unresolved": vulnerable_unresolved,
+            "high_urgency_count": len([r for r in active_reports if r.urgency_score >= 70])
+        },
+        "teams": {
+            "total": len(all_teams),
+            "available": teams_available,
+            "deployed": teams_deployed,
+            "by_type": by_team_type,
+            "utilization_rate": round(teams_deployed / len(all_teams) * 100, 1) if all_teams else 0.0
+        },
+        "timestamp": datetime.utcnow().isoformat() + 'Z'
+    }
+
+
 # ==================== Team Endpoints ====================
 
 @router.get("/teams")
@@ -370,8 +582,9 @@ async def dispatch_summary(db: Session = Depends(get_db)):
 async def list_reports(
     status: Optional[str] = None,
     disaster_type: Optional[str] = None,
-    min_urgency: Optional[float] = None,
-    assigned_only: Optional[bool] = None,
+    min_score: Optional[float] = None,
+    sort: Optional[str] = "urgency_desc",
+    skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db)
 ):
@@ -379,15 +592,20 @@ async def list_reports(
     List reports with filtering and sorting.
     
     Query Parameters:
-    - status: Filter by status (new, in_progress, resolved)
-    - disaster_type: Filter by disaster type
-    - min_urgency: Minimum urgency score
-    - assigned_only: Show only assigned (true) or unassigned (false) reports
+    - status: Filter by status (new, in_progress, resolved, false_report)
+    - disaster_type: Filter by disaster type (flood, earthquake, cyclone, other)
+    - min_score: Minimum urgency score (0-100)
+    - sort: Sort order (urgency_desc, urgency_asc, created_desc, created_asc) default: urgency_desc
+    - skip: Pagination offset (default 0)
     - limit: Maximum number of results (default 50)
     
-    Returns reports sorted by urgency score (descending).
+    Returns reports sorted by urgency score (descending) by default.
+    EXCLUDES reports that are marked as duplicates (only shows primary reports).
     """
-    query = db.query(Report)
+    from app.models import DisasterTypeEnum
+    
+    # Start with base query: exclude duplicates
+    query = db.query(Report).filter(Report.is_duplicate_of.is_(None))
     
     # Apply filters
     if status:
@@ -398,24 +616,32 @@ async def list_reports(
             raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
     
     if disaster_type:
-        from app.models import DisasterTypeEnum
         try:
             type_enum = DisasterTypeEnum(disaster_type)
             query = query.filter(Report.disaster_type == type_enum)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid disaster_type: {disaster_type}")
     
-    if min_urgency is not None:
-        query = query.filter(Report.urgency_score >= min_urgency)
+    if min_score is not None:
+        query = query.filter(Report.urgency_score >= min_score)
     
-    if assigned_only is not None:
-        if assigned_only:
-            query = query.filter(Report.assigned_team.isnot(None))
-        else:
-            query = query.filter(Report.assigned_team.is_(None))
+    # Apply sorting
+    if sort == "urgency_desc":
+        query = query.order_by(Report.urgency_score.desc())
+    elif sort == "urgency_asc":
+        query = query.order_by(Report.urgency_score.asc())
+    elif sort == "created_desc":
+        query = query.order_by(Report.created_at.desc())
+    elif sort == "created_asc":
+        query = query.order_by(Report.created_at.asc())
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid sort parameter: {sort}")
     
-    # Sort by urgency (highest first) and limit
-    reports = query.order_by(Report.urgency_score.desc()).limit(limit).all()
+    # Get total count before pagination
+    total_matching = query.count()
+    
+    # Apply pagination
+    reports = query.offset(skip).limit(limit).all()
     
     return {
         "reports": [
@@ -424,18 +650,25 @@ async def list_reports(
                 "disaster_type": report.disaster_type.value,
                 "urgency_score": report.urgency_score,
                 "status": report.status.value,
+                "verification_status": report.verification_status.value,
                 "assigned_team": report.assigned_team,
                 "num_people": report.num_people,
+                "vulnerable_flags": report.vulnerable_flags or [],
+                "corroboration_count": report.corroboration_count,
                 "location": {
                     "latitude": report.latitude,
                     "longitude": report.longitude,
                     "text": report.location_text
                 },
                 "created_at": report.created_at.isoformat() + 'Z',
-                "age_hours": (report.updated_at - report.created_at).total_seconds() / 3600
+                "updated_at": report.updated_at.isoformat() + 'Z',
+                "age_hours": round((datetime.utcnow() - report.created_at).total_seconds() / 3600, 1)
             }
             for report in reports
         ],
         "count": len(reports),
-        "total_matching": query.count()
+        "total": total_matching,
+        "skip": skip,
+        "limit": limit,
+        "has_more": (skip + len(reports)) < total_matching
     }
