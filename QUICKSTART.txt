@@ -1,0 +1,111 @@
+═══════════════════════════════════════════════════════════
+  🚨 RescueAI - QUICK START GUIDE (Windows)
+═══════════════════════════════════════════════════════════
+
+📋 PREREQUISITES:
+  ✓ Python 3.8+ installed (python --version)
+  ✓ Node.js 16+ installed (node --version)
+
+═══════════════════════════════════════════════════════════
+
+🚀 ONE-COMMAND SETUP:
+
+1. Open Command Prompt (cmd)
+
+2. Navigate to project folder:
+   cd C:\Users\vardh\Downloads\rescueai-sanskar\rescueai-main
+
+3. Run the demo script:
+   demo.bat
+
+4. Wait ~2 minutes for setup
+
+5. Two windows will open automatically:
+   - "RescueAI Backend" (port 8000)
+   - "RescueAI Frontend" (port 5173)
+
+═══════════════════════════════════════════════════════════
+
+🌐 ACCESS THE APPLICATION:
+
+Open your browser and visit:
+
+  🎯 Main Dashboard:      http://localhost:5173
+  📱 Report Form (PWA):   http://localhost:5173/report
+  📚 API Documentation:   http://localhost:8000/docs
+
+═══════════════════════════════════════════════════════════
+
+📱 TEST RESPONSIVE DESIGN:
+
+In Chrome/Edge:
+  1. Press F12 (DevTools)
+  2. Press Ctrl+Shift+M (Device toolbar)
+  3. Try these sizes:
+     - iPhone SE (375px) - Mobile view
+     - iPad Mini (768px) - Tablet view
+     - Laptop (1440px) - Desktop view
+
+Check:
+  ✓ Mobile: Hamburger menu, bottom tabs
+  ✓ Desktop: 3-column layout, full navigation
+  ✓ No horizontal scroll at any size
+
+═══════════════════════════════════════════════════════════
+
+🎯 QUICK DEMO:
+
+1. View Dashboard (http://localhost:5173)
+   - See 40 pre-loaded reports
+   - Try filters in Overview tab
+
+2. Submit Report (http://localhost:5173/report)
+   - Choose disaster type
+   - Enter details
+   - Submit and check dashboard
+
+3. Simulate Disaster (in cmd):
+   curl -X POST http://localhost:8000/api/demo/simulate-burst
+   - Watch 15 reports appear live!
+
+4. Assign Team:
+   - Click any report
+   - Click "Assign" on team recommendation
+   - Status changes to "In Progress"
+
+═══════════════════════════════════════════════════════════
+
+🛑 STOP SERVERS:
+
+  Simply close the two server windows:
+  - "RescueAI Backend"
+  - "RescueAI Frontend"
+
+═══════════════════════════════════════════════════════════
+
+❓ TROUBLESHOOTING:
+
+Port already in use?
+  - Close any existing Python/Node processes
+  - Or kill: taskkill /F /IM python.exe /IM node.exe
+
+Dependencies error?
+  - Backend: cd backend && venv\Scripts\activate && pip install -r requirements.txt
+  - Frontend: cd frontend && npm install
+
+Database error?
+  - cd backend && del rescueai.db && python seed_data.py
+
+═══════════════════════════════════════════════════════════
+
+📖 FULL DOCUMENTATION:
+
+  - SETUP_AND_RUN.md - Detailed setup steps
+  - RESPONSIVE_IMPLEMENTATION.md - Testing checklist
+  - README.md - Complete project documentation
+
+═══════════════════════════════════════════════════════════
+
+✨ That's it! You're ready to explore RescueAI!
+
+═══════════════════════════════════════════════════════════

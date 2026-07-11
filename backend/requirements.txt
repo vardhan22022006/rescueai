@@ -1,0 +1,20 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+sqlalchemy==2.0.25
+alembic==1.13.1
+python-dotenv==1.0.0
+faker==22.0.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+scikit-learn>=1.4.0
+requests==2.31.0
+shapely>=2.0.4
+apscheduler==3.10.4
+# Required for parsing Twilio's form-encoded webhook payloads
+python-multipart==0.0.9
+# Language detection
+langdetect==1.0.9
+# Translation — offline default backend
+# argostranslate==1.9.6  # Commented out - requires C++ compiler on Windows
+# Translation — optional Google free-tier backend (set TRANSLATE_BACKEND=google)
+deep-translator==1.11.4

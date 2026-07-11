@@ -1,0 +1,70 @@
+PLACEHOLDER_FOR_IMAGEFrontend fixes and polish — do not touch backend logic or API contracts.
+
+=== 1. CRITICAL BUG: Map only shows 1 pin despite 33 active reports ===
+
+The Command Center map is only rendering a single marker even though the
+sidebar shows 33 active reports, and a "8 report(s) missing GPS" warning
+appears. Investigate and fix:
+- Check whether the seeded report data actually has valid latitude/
+  longitude values for most reports (query the database directly if
+  needed) — if the seed script is generating null/missing coordinates
+  for most reports, fix the seed data generation.
+- Check whether the map component is correctly looping through ALL
+  reports returned by the API and placing a marker for each one with
+  valid coordinates, rather than only rendering one.
+- Reports that genuinely lack GPS (using location_text instead) should
+  NOT be silently dropped from the Priority Queue — they should still
+  appear in the list, just excluded from map markers specifically.
+
+Also fix location display: the map markers and Priority Queue currently
+show "No location" for most reports instead of the actual place name.
+Ensure location_text (or a reverse-geocoded label if only lat/lon exists)
+is displayed on both the map marker tooltip and each Priority Queue
+entry — every report should show a real place name, not a generic
+placeholder.
+
+=== 2. FIX: "How It Works" page has two repetitive pipeline sections ===
+
+Currently there are two near-identical rows of 7 cards — an abstract
+"AI Pipeline" row and an "Example Walkthrough" row directly below it in
+the same visual layout, which reads as repetitive/redundant. Merge these
+into ONE unified flow: keep the 7 pipeline stages as the structure, but
+show the illustrative example data directly within or below each stage
+card (e.g. combine "Reports In / SMS/App/Voice" with "SMS received"
+into one card that shows both the stage name and the example value),
+rather than two separate full rows repeating the same 7-step structure.
+Keep the "ILLUSTRATIVE SCENARIO — NOT LIVE DATA" label clearly visible.
+
+=== 3. HERO SECTION for "How It Works" landing page ===
+
+Redesign the top of the "How It Works" page as a full-width hero section
+using this pattern: a full-bleed background image (use a satellite/
+aerial-style photo — the same Esri World Imagery satellite tile style
+already used for the map, or a stock aerial disaster-response-style
+image) with a dark gradient overlay for text readability, bold large
+headline text positioned over the image, and a rounded pill-shaped
+primary call-to-action button ("Enter Command Center") with a
+transparent/outlined secondary button style. Keep the existing headline
+copy and problem statement text — just restyle the presentation as a
+hero banner instead of plain text on a white background. The pipeline
+stages and example walkthrough (from fix #2) should appear in a clean
+section below this hero, not inside it.
+
+=== 4. COLOR FIX: Replace navy blue in sidebar and Priority Queue ===
+
+The left "System Overview" sidebar and the right "Priority Queue" panel
+still use navy blue backgrounds — replace with the light grey glossy/
+frosted-glass aesthetic already applied elsewhere (soft light grey,
+subtle blur/glass effect on cards, NOT navy blue, NOT flat solid grey
+either — should have the same soft glossy surface treatment as other
+already-updated panels). Keep red/yellow/amber reserved only for
+critical/warning urgency indicators as before — everything else in
+these two panels should use the light grey glossy palette consistently
+with the rest of the app.
+
+After all fixes, confirm: (a) the map shows a marker for every report
+with valid coordinates, not just one, (b) every report shows a real
+location name instead of "No location", (c) the How It Works page has
+one unified pipeline flow, not two repeated rows, (d) a hero section
+with background imagery appears at the top of How It Works, and (e) the
+sidebar and Priority Queue no longer use navy blue.
